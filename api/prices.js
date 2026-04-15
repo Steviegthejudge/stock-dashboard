@@ -34,11 +34,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "No valid tickers provided" });
   }
 
-  // Optional shorthand mapping for common London-listed ETFs.
-  // We may need to tweak these after your first test.
+  // Optional shorthand mapping
   const SYMBOL_MAP = {
-    VUSA: "VUSA",
-    VUAA: "VUAA"
+    VUSA: "VUSA.L",
+    VUAA: "VUAA.L"
   };
 
   const mappedTickers = tickers.map(t => SYMBOL_MAP[t] || t);
@@ -58,7 +57,7 @@ export default async function handler(req, res) {
       const text = await upstream.text();
       return res.status(502).json({
         error: `Marketstack request failed with status ${upstream.status}`,
-        detail: text.slice(0, 300)
+        detail: text
       });
     }
 
@@ -73,7 +72,7 @@ export default async function handler(req, res) {
 
     const rows = Array.isArray(data.data) ? data.data : [];
 
-    // Keep only the newest record for each symbol.
+    // Keep only latest row per symbol
     const latestBySymbol = new Map();
     for (const row of rows) {
       const symbol = row.symbol;
@@ -106,8 +105,23 @@ export default async function handler(req, res) {
       const open = Number(item.open);
       const close = Number(item.close);
 
+      // 🔴 KEY FIX: reject invalid/zero prices
+      if (!Number.isFinite(close) || close <= 0) {
+        return {
+          symbol: originalSymbol,
+          requestedSymbol,
+          found: false,
+          price: null,
+          changePercent: 0,
+          currency: item.currency_code || null,
+          exchange: item.exchange || null,
+          marketState: "CLOSED",
+          date: item.date || null
+        };
+      }
+
       let changePercent = 0;
-      if (Number.isFinite(open) && open !== 0 && Number.isFinite(close)) {
+      if (Number.isFinite(open) && open !== 0) {
         changePercent = ((close - open) / open) * 100;
       }
 
@@ -116,7 +130,7 @@ export default async function handler(req, res) {
         requestedSymbol,
         found: true,
         name: item.symbol,
-        price: Number.isFinite(close) ? close : null,
+        price: close,
         changePercent,
         currency: item.currency_code || null,
         exchange: item.exchange || null,
@@ -126,6 +140,7 @@ export default async function handler(req, res) {
     });
 
     return res.status(200).json(formatted);
+
   } catch (error) {
     return res.status(500).json({
       error: "Server error while fetching Marketstack data",
