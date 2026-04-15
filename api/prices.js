@@ -12,13 +12,14 @@ export default async function handler(req, res) {
   }
 
   const rawTickers = String(req.query.tickers || "").trim();
+
   if (!rawTickers) {
-    return res.status(400).json({ error: "Missing tickers query parameter" });
+    return res.status(400).json({ error: "Missing tickers parameter" });
   }
 
   const tickers = rawTickers
     .split(",")
-    .map((ticker) => ticker.trim().toUpperCase())
+    .map(t => t.trim().toUpperCase())
     .filter(Boolean);
 
   if (tickers.length === 0) {
@@ -26,38 +27,40 @@ export default async function handler(req, res) {
   }
 
   const symbols = [...new Set(tickers)].join(",");
+
   const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;
 
   try {
     const upstream = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9"
       }
     });
 
     if (!upstream.ok) {
-      const body = await upstream.text();
+      const text = await upstream.text();
       return res.status(502).json({
         error: `Upstream market data request failed with status ${upstream.status}`,
-        detail: body.slice(0, 300)
+        detail: text.slice(0, 200)
       });
     }
 
     const data = await upstream.json();
-    const results = Array.isArray(data?.quoteResponse?.result) ? data.quoteResponse.result : [];
 
-    const payload = results.map((item) => ({
+    const results = data?.quoteResponse?.result || [];
+
+    const formatted = results.map(item => ({
       symbol: item.symbol,
       name: item.shortName || item.longName || item.symbol,
       price: item.regularMarketPrice ?? null,
       changePercent: item.regularMarketChangePercent ?? 0,
-      currency: item.currency || null,
-      exchange: item.fullExchangeName || null,
-      marketState: item.marketState || null
+      currency: item.currency || null
     }));
 
-    return res.status(200).json(payload);
+    return res.status(200).json(formatted);
+
   } catch (error) {
     return res.status(500).json({
       error: "Server error while fetching market data",
