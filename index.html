@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-6">
+  <div class="max-w-3xl mx-auto">
+    <div class="flex justify-between items-center mb-4">
+      <h1 class="text-2xl font-bold">Stock Dashboard</h1>
+      <span class="text-sm text-gray-400">v2.0</span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
+      <input id="ticker" placeholder="Ticker (e.g. AAPL or VUSA.L)" class="text-black p-2 rounded" />
+      <input id="amount" type="number" step="0.01" placeholder="Amount Invested (£)" class="text-black p-2 rounded" />
+      <button onclick="addStock()" class="bg-blue-500 px-4 py-2 rounded">Add</button>
+    </div>
+
+    <div class="flex justify-between items-center mb-4">
+      <div id="summary" class="text-sm text-gray-300">No holdings yet.</div>
+      <button onclick="clearAllStocks()" class="bg-gray-700 px-3 py-2 rounded text-sm">Clear All</button>
+    </div>
+
+    <div id="message" class="hidden mb-4 p-3 rounded text-sm"></div>
+    <div id="stocks" class="space-y-2"></div>
+  </div>
+
+  <script>
+    const VERSION = "v2.0";
+
+    function getStocks() {
+      try {
+        return JSON.parse(localStorage.getItem("stocks") || "[]");
+      } catch {
+        return [];
+      }
+    }
+
+    function saveStocks(stocks) {
+      localStorage.setItem("stocks", JSON.stringify(stocks));
+    }
+
+    function showMessage(text, type = "info") {
+      const el = document.getElementById("message");
+      el.textContent = text;
+      el.className = "mb-4 p-3 rounded text-sm";
+
+      if (type === "error") {
+        el.classList.add("bg-red-900", "text-red-100");
+      } else if (type === "success") {
+        el.classList.add("bg-green-900", "text-green-100");
+      } else {
+        el.classList.add("bg-gray-800", "text-gray-100");
+      }
+    }
+
+    function clearMessage() {
+      const el = document.getElementById("message");
+      el.className = "hidden";
+      el.textContent = "";
+    }
+
+    function addStock() {
+      clearMessage();
+
+      const tickerInput = document.getElementById("ticker");
+      const amountInput = document.getElementById("amount");
+
+      const ticker = tickerInput.value.trim().toUpperCase();
+      const amount = parseFloat(amountInput.value);
+
+      if (!ticker) {
+        showMessage("Enter a ticker first.", "error");
+        return;
+      }
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        showMessage("Enter a valid amount invested.", "error");
+        return;
+      }
+
+      const stocks = getStocks().filter((s) => s.ticker !== ticker);
+      stocks.push({ ticker, amount });
+      saveStocks(stocks);
+
+      tickerInput.value = "";
+      amountInput.value = "";
+
+      showMessage(`Saved ${ticker}.`, "success");
+      render();
+    }
+
+    function removeStock(ticker) {
+      const stocks = getStocks().filter((s) => s.ticker !== ticker);
+      saveStocks(stocks);
+      showMessage(`Removed ${ticker}.`, "success");
+      render();
+    }
+
+    function clearAllStocks() {
+      saveStocks([]);
+      clearMessage();
+      render();
+    }
+
+    async function fetchPrices(tickers) {
+      const query = encodeURIComponent(tickers.join(","));
+      const res = await fetch(`/api/prices?tickers=${query}`);
+
+      if (!res.ok) {
+        let message = `Price lookup failed (${res.status})`;
+        try {
+          const err = await res.json();
+          if (err && err.error) message = err.error;
+        } catch {}
+        throw new Error(message);
+      }
+
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error("Unexpected response from price service.");
+      }
+
+      return data;
+    }
+
+    async function render() {
+      const container = document.getElementById("stocks");
+      const summary = document.getElementById("summary");
+      const stocks = getStocks();
+
+      if (stocks.length === 0) {
+        container.innerHTML = '<p class="text-gray-300">No stocks added yet.</p>';
+        summary.textContent = "No holdings yet.";
+        return;
+      }
+
+      container.innerHTML = '<p class="text-gray-400">Loading prices...</p>';
+
+      try {
+        const tickers = [...new Set(stocks.map((s) => s.ticker))];
+        const prices = await fetchPrices(tickers);
+
+        container.innerHTML = "";
+
+        let totalInvested = 0;
+        let totalValue = 0;
+
+        stocks.forEach((stock) => {
+          const priceData = prices.find((p) => p.symbol === stock.ticker);
+          const invested = Number(stock.amount) || 0;
+          totalInvested += invested;
+
+          const el = document.createElement("div");
+          el.className = "p-4 bg-gray-800 rounded flex justify-between items-center gap-4";
+
+          if (!priceData) {
+            el.innerHTML = `
+              <div>
+                <div class="font-bold">${stock.ticker}</div>
+                <div class="text-sm text-gray-300">Invested: £${invested.toFixed(2)}</div>
+                <div class="text-sm text-yellow-300">Price data not available</div>
+              </div>
+              <button onclick="removeStock('${stock.ticker}')" class="bg-red-600 px-3 py-2 rounded text-sm">Delete</button>
+            `;
+            container.appendChild(el);
+            return;
+          }
+
+          const changePercent = Number(priceData.changePercent) || 0;
+          const currentPrice = Number(priceData.price) || 0;
+          const value = invested * (1 + changePercent / 100);
+          const gain = value - invested;
+          totalValue += value;
+
+          el.innerHTML = `
+            <div>
+              <div class="font-bold">${stock.ticker}</div>
+              <div class="text-sm text-gray-300">Invested: £${invested.toFixed(2)}</div>
+              <div class="text-sm text-gray-300">Price: ${currentPrice.toFixed(2)}</div>
+            </div>
+            <div class="text-right">
+              <div>£${value.toFixed(2)}</div>
+              <div class="text-sm ${gain >= 0 ? 'text-green-400' : 'text-red-400'}">
+                ${gain >= 0 ? '+' : ''}£${gain.toFixed(2)} (${changePercent.toFixed(2)}%)
+              </div>
+            </div>
+            <button onclick="removeStock('${stock.ticker}')" class="bg-red-600 px-3 py-2 rounded text-sm">Delete</button>
+          `;
+
+          container.appendChild(el);
+        });
+
+        const totalGain = totalValue - totalInvested;
+        const totalGainPct = totalInvested > 0 ? (totalGain / totalInvested) * 100 : 0;
+        summary.innerHTML = `
+          Total invested: £${totalInvested.toFixed(2)} |
+          Estimated value: £${totalValue.toFixed(2)} |
+          <span class="${totalGain >= 0 ? 'text-green-400' : 'text-red-400'}">
+            ${totalGain >= 0 ? '+' : ''}£${totalGain.toFixed(2)} (${totalGainPct.toFixed(2)}%)
+          </span>
+        `;
+      } catch (err) {
+        container.innerHTML = '<p class="text-red-300">Unable to load prices right now.</p>';
+        showMessage(err.message || "Unable to load prices.", "error");
+      }
+    }
+
+    render();
+  </script>
+</body>
+</html>
