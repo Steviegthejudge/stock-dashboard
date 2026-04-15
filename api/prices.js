@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   const symbolsParam = mappedTickers.join(",");
 
   const url =
-    `http://api.marketstack.com/v1/eod?access_key=${encodeURIComponent(apiKey)}&symbols=${encodeURIComponent(symbolsParam)}&limit=100`;
+    `https://api.marketstack.com/v1/eod?access_key=${encodeURIComponent(apiKey)}&symbols=${encodeURIComponent(symbolsParam)}&limit=100`;
 
   try {
     const upstream = await fetch(url, {
