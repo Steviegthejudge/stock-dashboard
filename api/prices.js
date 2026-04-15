@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   const apiKey = process.env.MARKETSTACK_ACCESS_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: "Missing MARKETSTACK_ACCESS_KEY in Vercel environment variables"
+      error: "Missing MARKETSTACK_ACCESS_KEY"
     });
   }
 
@@ -34,7 +34,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "No valid tickers provided" });
   }
 
-  // Optional shorthand mapping
+  // Map Trading212-style tickers → exchange format
   const SYMBOL_MAP = {
     VUSA: "VUSA.L",
     VUAA: "VUAA.L"
@@ -43,8 +43,9 @@ export default async function handler(req, res) {
   const mappedTickers = tickers.map(t => SYMBOL_MAP[t] || t);
   const symbolsParam = mappedTickers.join(",");
 
+  // 🔥 NEW: add exchange=XLON for London-listed ETFs
   const url =
-  `https://api.marketstack.com/v2/intraday/latest?access_key=${encodeURIComponent(apiKey)}&symbols=${encodeURIComponent(symbolsParam)}`;
+    `https://api.marketstack.com/v2/eod/latest?access_key=${encodeURIComponent(apiKey)}&symbols=${encodeURIComponent(symbolsParam)}&exchange=XLON`;
 
   try {
     const upstream = await fetch(url, {
@@ -65,26 +66,17 @@ export default async function handler(req, res) {
 
     if (data.error) {
       return res.status(502).json({
-        error: data.error.message || "Marketstack returned an error",
+        error: data.error.message || "Marketstack error",
         detail: data.error
       });
     }
 
     const rows = Array.isArray(data.data) ? data.data : [];
 
-    // Keep only latest row per symbol
     const latestBySymbol = new Map();
     for (const row of rows) {
-      const symbol = row.symbol;
-      if (!symbol) continue;
-
-      const existing = latestBySymbol.get(symbol);
-      const rowDate = row.date ? new Date(row.date).getTime() : 0;
-      const existingDate = existing?.date ? new Date(existing.date).getTime() : 0;
-
-      if (!existing || rowDate > existingDate) {
-        latestBySymbol.set(symbol, row);
-      }
+      if (!row.symbol) continue;
+      latestBySymbol.set(row.symbol, row);
     }
 
     const formatted = mappedTickers.map((requestedSymbol, index) => {
@@ -105,7 +97,7 @@ export default async function handler(req, res) {
       const open = Number(item.open);
       const close = Number(item.close);
 
-      // 🔴 KEY FIX: reject invalid/zero prices
+      // ✅ Reject invalid ETF data (0 or missing)
       if (!Number.isFinite(close) || close <= 0) {
         return {
           symbol: originalSymbol,
@@ -143,7 +135,7 @@ export default async function handler(req, res) {
 
   } catch (error) {
     return res.status(500).json({
-      error: "Server error while fetching Marketstack data",
+      error: "Server error",
       detail: error.message
     });
   }
