@@ -11,13 +11,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const apiKey = process.env.TWELVE_DATA_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({
-      error: "Missing TWELVE_DATA_API_KEY in Vercel environment variables"
-    });
-  }
-
   const rawTickers = String(req.query.tickers || "").trim();
   if (!rawTickers) {
     return res.status(400).json({ error: "Missing tickers parameter" });
@@ -34,72 +27,78 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "No valid tickers provided" });
   }
 
-  try {
-    const symbolParam = tickers.join(",");
-    const url =
-      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbolParam)}&apikey=${encodeURIComponent(apiKey)}`;
+  // Optional shorthand mapping for common UK ETFs
+  const SYMBOL_MAP = {
+    VUSA: "VUSA.L",
+    VUAA: "VUAA.L"
+  };
 
+  const mappedTickers = tickers.map(t => SYMBOL_MAP[t] || t);
+  const symbolParam = mappedTickers.join(",");
+
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbolParam)}`;
+
+  try {
     const upstream = await fetch(url, {
       headers: {
-        "Accept": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json",
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "Referer": "https://finance.yahoo.com/"
       }
     });
 
     if (!upstream.ok) {
       const text = await upstream.text();
       return res.status(502).json({
-        error: `Twelve Data request failed with status ${upstream.status}`,
+        error: `Yahoo market data request failed with status ${upstream.status}`,
         detail: text.slice(0, 300)
       });
     }
 
     const data = await upstream.json();
+    const results = Array.isArray(data?.quoteResponse?.result)
+      ? data.quoteResponse.result
+      : [];
 
-    // Twelve Data can return:
-    // - a single object for one symbol
-    // - an object keyed by symbol for multiple symbols
-    // - an error object with code/message/status
+    const bySymbol = new Map(results.map(item => [item.symbol, item]));
 
-    if (data.status === "error") {
-      return res.status(502).json({
-        error: data.message || "Twelve Data returned an error",
-        detail: data
-      });
-    }
+    const formatted = mappedTickers.map((requestedSymbol, index) => {
+      const originalSymbol = tickers[index];
+      const item = bySymbol.get(requestedSymbol);
 
-    const toNumber = (value) => {
-      const num = Number(value);
-      return Number.isFinite(num) ? num : null;
-    };
+      if (!item) {
+        return {
+          symbol: originalSymbol,
+          requestedSymbol,
+          found: false,
+          price: null,
+          changePercent: 0,
+          currency: null
+        };
+      }
 
-    const toPercentNumber = (value) => {
-      if (value == null) return 0;
-      const cleaned = String(value).replace("%", "").trim();
-      const num = Number(cleaned);
-      return Number.isFinite(num) ? num : 0;
-    };
-
-    let quotes = [];
-
-    if (tickers.length === 1 && data && typeof data === "object" && !Array.isArray(data) && data.symbol) {
-      quotes = [data];
-    } else if (data && typeof data === "object" && !Array.isArray(data)) {
-      quotes = Object.values(data).filter(item => item && typeof item === "object");
-    }
-
-    const formatted = quotes.map(item => ({
-      symbol: item.symbol,
-      name: item.name || item.symbol,
-      price: toNumber(item.close ?? item.price),
-      changePercent: toPercentNumber(item.percent_change),
-      currency: item.currency || null,
-      exchange: item.exchange || null
-    }));
+      return {
+        symbol: originalSymbol,
+        requestedSymbol,
+        found: true,
+        name: item.shortName || item.longName || originalSymbol,
+        price: Number.isFinite(Number(item.regularMarketPrice))
+          ? Number(item.regularMarketPrice)
+          : null,
+        changePercent: Number.isFinite(Number(item.regularMarketChangePercent))
+          ? Number(item.regularMarketChangePercent)
+          : 0,
+        currency: item.currency || null,
+        exchange: item.fullExchangeName || item.exchange || null,
+        marketState: item.marketState || null
+      };
+    });
 
     return res.status(200).json(formatted);
   } catch (error) {
     return res.status(500).json({
-      error: "Server error while fetching market data",
+      error: "Server error while fetching Yahoo market data",
       detail: error.message
     });
   }
